@@ -24,11 +24,12 @@ use Getopt::Long;
 use Sys::Hostname;
 use strict;
 
-my $cmd_crm = "crm";
+my $cmd_pcs = "pcs";
+my $cmd_cibadmin = "cibadmin";
 my $cmd_crm_resource = "crm_resource";
 my $cmd_ptest = "ptest";
 
-my @all_cmds = ($cmd_crm, $cmd_crm_resource, $cmd_ptest);
+my @all_cmds = ($cmd_pcs, $cmd_cibadmin, $cmd_crm_resource, $cmd_ptest);
 
 sub usage() {
 printf "$0 --help
@@ -73,14 +74,14 @@ sub fire_resource_action {
 	my $rc=0;
 	if ( $act eq "stop" ) {
 		printf "fire_resource_actioni stop\n";
-		if (system($cmd_crm,"resource",$act,$rsc)) { $rc=1; }
+		if (system($cmd_pcs,"resource",$act,$rsc)) { $rc=1; }
 	} elsif ( $act eq "start" ) {
 		printf "fire_resource_action\n";
-		if (system($cmd_crm,"resource",$act,$rsc) ) { $rc=1; }
+		if (system($cmd_pcs,"resource",$act,$rsc) ) { $rc=1; }
 	} elsif ( $act eq "migrate" ) {
 		printf "fire_resource_action\n";
 		if ( defined $nod ) {
-			if (system($cmd_crm,"resource",$act,$rsc,$nod) ) { $rc=1; }
+			if (system($cmd_pcs,"constraint","location",$rsc,"prefers",$nod) ) { $rc=1; }
 		}
 	} 
 	printf " rc=%i\n", $rc;
@@ -143,67 +144,52 @@ sub list_sap_resources {
 	# found values
 
 	my ($fclass, $fprovider, $fra, $fname, $fgname) = ("","","","","");
-	my $found = 0;     # found a primitive matching criteria
 	my $foundRes = 0; # found correct Resource
 
-	open CRMOUT, "$cmd_crm configure show 2>/dev/null |" || die "could not open crm output";
+	open CRMOUT, "$cmd_cibadmin --local -Q -A \"//resources\" -e primitive 2>/dev/null |" || die "could not open cibadmin output";
 	while (<CRMOUT>) {
-		chomp;
 		my $line = $_;
-		if ( ($foundRes==0) && ( $line =~ /^primitive ([a-zA-Z0-9_]+) ([a-zA-Z0-9_]+):([a-zA-Z0-9_]+):([a-zA-Z0-9_]+)/ )) {
-			#
-			# 1. found begin of primitive definition and we did not already found the resource
-			#   -> catch resource-name, resource-class, resource-provider, resource-agent
-			#
-			($fclass, $fprovider, $fra, $fname) = ($2, $3, $4, $1);
-			if (( $fclass eq $sclass ) && ( $fprovider eq $sprovider ) && ( $fra eq $sra ) ) {
-				#
-				# 2. we have found a primitive of the correct type
-				#
-				printf("rsc: %s\n", $_);
-				$found = 1;
-			} else {
-				$found = 0;
-			}
-		} elsif ( ($found==1) && ( $line =~ /^\s+params.*\s+($sparam)="([^"]+)"/ )) {
-			#
-			# 3. while we found a resource (primitive) of correct type we now could check the params
-			#
-			my ($paramName, $paramValue) = ($1, $2);
-			#
-			# InstanceName should look like <SID>_<TYPE><NUMBER>_<VIRTHOST>
-			#
-			if ($paramName =~ /InstanceName/) {
-				printf "PN=%s PV=%s\n", $paramName, $paramValue;
-			}
-			if ( $paramValue =~ /^${sid}_[a-zA-Z0-9]+${ino}_[a-zA-Z0-9_-]+$/ ) {
-				$foundRes=1;
-			} elsif ( ($found==1) && ( $line =~ /^\s+params.*\s+($sparam2)="([^"]+)"/ )) {
-				#
-				# 4. while we found a resource (primitive) of correct type we now could check the params 2
-				#
-				my ($paramName, $paramValue) = ($1, $2);
-				#
-				# InstanceName should look like <SID>_<TYPE><NUMBER>_<VIRTHOST>
-				#
-				if ($paramName =~ /ERS_InstanceName/) {
-					printf "PN=%s PV=%s\n", $paramName, $paramValue;
-				}
-				if ( $paramValue =~ /^${sid}_[a-zA-Z0-9]+${ino}_[a-zA-Z0-9_-]+$/ ) {
-					$foundRes=1;
-				}
-			}
-	        } elsif ( ($foundRes==1) && ( $line =~ /^(group|ms) ([a-zA-Z0-9_]+).*($fname)/ )) {
-			# 
-			# found resource is member of a group
-			#
-			$fgname = $2;
+
+		if ($line =~ /primitive.*id='([a-zA-Z0-9_]+)'.*type='$sra'/) {
+			($fname) = ($1);
+		} else {
+			next;
 		}
-	}	
-printf "view-point: lsr 1\n";
+
+		if ( $line =~ /[group|master|clone].*id='([a-zA-Z0-9_]+)'/) {
+			($fgname) = ($1);
+		}
+
+		if ($foundRes==0) {
+			open RESOURCE_OUT, "$cmd_cibadmin -Q --xpath \"//primitive[\@type='$sra'][\@id='$fname']//nvpair[\@name='$sparam']\"  2>/dev/null |" || die "could not open crm_resource output";
+			while (<RESOURCE_OUT>) {
+				my $result = $_;
+				if ($result =~ /value="([a-zA-Z0-9_]+)"/) {
+					if ( $1 =~ /^${sid}_[a-zA-Z0-9]+${ino}_[a-zA-Z0-9_-]+$/ ) {
+						$foundRes=1;
+					}
+				}
+			}
+		}
+
+		if ($foundRes==0) {
+			open RESOURCE_OUT, "$cmd_cibadmin -Q --xpath \"//primitive[\@type='$sra'][\@id='$fname']//nvpair[\@name='$sparam2']\"  2>/dev/null |" || die "could not open crm_resource output";
+			while (<RESOURCE_OUT>) {
+				my $result = $_;
+				if ($result =~ /value="([a-zA-Z0-9_]+)"/) {
+					if ( $1 =~ /^${sid}_[a-zA-Z0-9]+${ino}_[a-zA-Z0-9_-]+$/ ) {
+						$foundRes=1;
+					}
+				}
+			}
+		}
+
+		if ($foundRes == 1) {
+			last;
+		}
+	}
 
 	if ($foundRes==1) {
-printf "view-point: lsr 2 found\n";
 		if ($out eq "") {
 			printf "%s:%s:%s\n", $fname, $fgname, "-";
 			$rc=1;
