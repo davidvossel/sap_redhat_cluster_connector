@@ -146,7 +146,7 @@ sub list_sap_resources {
 	my ($fclass, $fprovider, $fra, $fname, $fgname) = ("","","","","");
 	my $foundRes = 0; # found correct Resource
 
-	open CRMOUT, "$cmd_cibadmin --local -Q -A \"//resources\" -e primitive 2>/dev/null |" || die "could not open cibadmin output";
+	open CRMOUT, "$cmd_cibadmin --local -Q --xpath \"//resources\" -e primitive 2>/dev/null |" || die "could not open cibadmin output";
 	while (<CRMOUT>) {
 		my $line = $_;
 
