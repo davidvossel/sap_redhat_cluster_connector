@@ -194,7 +194,9 @@ sub list_sap_resources {
 			printf "%s:%s:%s\n", $fname, $fgname, "-";
 			$rc=1;
 		} else {
-			open OUT, ">" . $out;
+		        unless (open(OUT, '>',$out)) {
+			    print STDERR "Can't open $out: $!\n";
+			}
 			printf "%s:%s:%s:%s:%s\n", $sid, $ino, $fname, $fgname, "-";
 			printf OUT "%s:%s:%s:%s:%s\n", $sid, $ino, $fname, $fgname, "-";
 			close OUT;
