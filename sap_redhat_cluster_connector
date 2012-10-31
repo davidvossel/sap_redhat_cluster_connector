@@ -24,6 +24,7 @@ use Getopt::Long;
 use Sys::Hostname;
 use strict;
 
+my $trace = 0;
 my $cmd_pcs = "pcs";
 my $cmd_cibadmin = "cibadmin";
 my $cmd_crm_resource = "crm_resource";
@@ -132,39 +133,39 @@ sub list_sap_resources {
 	#use IO::Handle;
 
 	my ($sclass, $sprovider, $sra, $sparam, $sparam2 ) = ("ocf", "heartbeat", "SAPInstance", "InstanceName", "ERS_InstanceName");
-	#my ($out, $sid, $ino ) = @ARGV;
 
 	$ENV{'PATH'} = $ENV{'PATH'} . ":/usr/sbin:/sbin";
-	#open DEBUG, ">>/tmp/TEST.pl.debug" || die "could not open debug";
-	printf DEBUG "(out, sid, ino) = ( %s, %s, %s)\n", $out, $sid, $ino ;
-	printf "ARGV: %s", join(" ", @ARGV);
-	#*STDOUT=*DEBUG;
-	printf "Hello world\n";
+	print "(out, sid, ino) = ( $out, $sid, $ino )\n" if $trace;
 
 	# found values
 
 	my ($fclass, $fprovider, $fra, $fname, $fgname) = ("","","","","");
 	my $foundRes = 0; # found correct Resource
 
-	open CRMOUT, "$cmd_cibadmin --local -Q -A \"//resources\" -e primitive 2>/dev/null |" || die "could not open cibadmin output";
+	open CRMOUT, "$cmd_cibadmin --local -Q --xpath '//primitive[\@type=\"$sra\"]' --node-path 2>/dev/null |" || die "could not open cibadmin output";
 	while (<CRMOUT>) {
 		my $line = $_;
-
-		if ($line =~ /primitive.*id='([a-zA-Z0-9_]+)'.*type='$sra'/) {
+		print "Got: $line" if $trace;
+		if ($line =~ /primitive..id='([a-zA-Z0-9_]+)'/) {
 			($fname) = ($1);
+			print "Found fname: $fname\n" if $trace;
 		} else {
+			print "No fname\n" if $trace;
 			next;
 		}
 
-		if ( $line =~ /[group|master|clone].*id='([a-zA-Z0-9_]+)'/) {
+		if ( $line =~ /[group|master|clone]..id='([a-zA-Z0-9_]+)'/) {
 			($fgname) = ($1);
+			print "Found fgname: $fgname\n" if $trace;
 		}
 
 		if ($foundRes==0) {
-			open RESOURCE_OUT, "$cmd_cibadmin -Q --xpath \"//primitive[\@type='$sra'][\@id='$fname']//nvpair[\@name='$sparam']\"  2>/dev/null |" || die "could not open crm_resource output";
+			open RESOURCE_OUT, "$cmd_cibadmin -Q --xpath \"//primitive[\@id='$fname']//nvpair[\@name='$sparam']\"  2>/dev/null |" || die "could not open crm_resource output";
 			while (<RESOURCE_OUT>) {
 				my $result = $_;
+				print " Got: $result" if $trace;
 				if ($result =~ /value="([a-zA-Z0-9_]+)"/) {
+				        print " Found value: $1\n" if $trace;
 					if ( $1 =~ /^${sid}_[a-zA-Z0-9]+${ino}_[a-zA-Z0-9_-]+$/ ) {
 						$foundRes=1;
 					}
@@ -173,10 +174,12 @@ sub list_sap_resources {
 		}
 
 		if ($foundRes==0) {
-			open RESOURCE_OUT, "$cmd_cibadmin -Q --xpath \"//primitive[\@type='$sra'][\@id='$fname']//nvpair[\@name='$sparam2']\"  2>/dev/null |" || die "could not open crm_resource output";
+			open RESOURCE_OUT, "$cmd_cibadmin -Q --xpath \"//primitive[\@id='$fname']//nvpair[\@name='$sparam2']\"  2>/dev/null |" || die "could not open crm_resource output";
 			while (<RESOURCE_OUT>) {
 				my $result = $_;
+				print "  Got: $result" if $trace;
 				if ($result =~ /value="([a-zA-Z0-9_]+)"/) {
+				        print "  Found value: $1\n" if $trace;
 					if ( $1 =~ /^${sid}_[a-zA-Z0-9]+${ino}_[a-zA-Z0-9_-]+$/ ) {
 						$foundRes=1;
 					}
@@ -185,11 +188,13 @@ sub list_sap_resources {
 		}
 
 		if ($foundRes == 1) {
+		        print "Found resource\n" if $trace;
 			last;
 		}
 	}
 
 	if ($foundRes==1) {
+	        print "Writing to $out\n" if $trace;
 		if ($out eq "") {
 			printf "%s:%s:%s\n", $fname, $fgname, "-";
 			$rc=1;
@@ -204,9 +209,9 @@ sub list_sap_resources {
 		}
 	}
 
-	# TODO: scores and node names sorted by scores -> use ptest
+	# TODO: scores and node names sorted by scores -> use crm_simulate
 	#
-	#ls3198:/usr/lib/ocf/resource.d/heartbeat # ptest -Ls | grep ls3199 | egrep '(rsc_SAPInstance_NA0_ASCS00_sapna0as|grp_sap_NA0)'
+	#ls3198:/usr/lib/ocf/resource.d/heartbeat # crm_simulate -Ls | grep ls3199 | egrep '(rsc_SAPInstance_NA0_ASCS00_sapna0as|grp_sap_NA0)'
 	#group_color: grp_sap_NA0 allocation score on ls3199: 0
 	#group_color: rsc_SAPInstance_NA0_ASCS00_sapna0as allocation score on ls3199: 0
 	#native_color: rsc_SAPInstance_NA0_ASCS00_sapna0as allocation score on ls3199: -INFINITY
