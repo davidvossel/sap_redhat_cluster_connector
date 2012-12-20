@@ -25,12 +25,11 @@ use Sys::Hostname;
 use strict;
 
 my $trace = 0;
-my $cmd_pcs = "pcs";
 my $cmd_cibadmin = "cibadmin";
 my $cmd_crm_resource = "crm_resource";
 my $cmd_ptest = "ptest";
 
-my @all_cmds = ($cmd_pcs, $cmd_cibadmin, $cmd_crm_resource, $cmd_ptest);
+my @all_cmds = ($cmd_cibadmin, $cmd_crm_resource, $cmd_ptest);
 
 sub usage() {
 printf "$0 --help
@@ -74,17 +73,17 @@ sub fire_resource_action {
 	my ($rsc, $act, $nod) = @_;
 	my $rc=0;
 	if ( $act eq "stop" ) {
-		printf "fire_resource_actioni stop\n";
-		if (system($cmd_pcs,"resource",$act,$rsc)) { $rc=1; }
+		printf "fire_resource_action stop\n";
+		if (system($cmd_crm_resource,"-r",$rsc,"-m","-p","target-role","-v","Stopped")) { $rc=1; }
 	} elsif ( $act eq "start" ) {
 		printf "fire_resource_action\n";
-		if (system($cmd_pcs,"resource",$act,$rsc) ) { $rc=1; }
+		if (system($cmd_crm_resource,"-r",$rsc,"-m","-d","target-role") ) { $rc=1; }
 	} elsif ( $act eq "migrate" ) {
 		printf "fire_resource_action\n";
 		if ( defined $nod ) {
-			if (system($cmd_pcs,"constraint","location",$rsc,"prefers",$nod) ) { $rc=1; }
+			if (system($cmd_crm_resource,"-r",$rsc,"-M","-N",$nod) ) { $rc=1; }
 		}
-	} 
+	}
 	printf " rc=%i\n", $rc;
 	return $rc;
 }
