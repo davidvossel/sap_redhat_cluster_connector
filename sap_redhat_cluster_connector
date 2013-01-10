@@ -35,7 +35,7 @@ my $nowstring;
 
 my $cmd_cibadmin = "cibadmin";
 my $cmd_crm_resource = "crm_resource";
-my $cmd_ptest = "ptest";
+my $cmd_ptest = "crm_simulate";
 my $logident = "sap_suse_cluster_connector";
 my $logoptions = "pid";
 my $logfacility = "LOG_USER";
