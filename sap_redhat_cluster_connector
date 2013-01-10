@@ -18,26 +18,41 @@
 #    TODO: long cmd names (like check_pending_action)
 #    TODO: Could we check for the record-pending option?
 #    TODO: database instances -> lsr --sid SID --dbhost HOST --dbtype TYPE
+#    TODO: all syslog messages also to developer trace log file
 #
 
 use Getopt::Long;
 use Sys::Hostname;
+use Sys::Syslog;
 use strict;
+use File::Temp qw/ tempfile tempdir /;
 
-my $trace = 0;
+my $DEBUG; my $filename;
+my $nowstring;
+#
+# init some environment 
+#
+
 my $cmd_cibadmin = "cibadmin";
 my $cmd_crm_resource = "crm_resource";
 my $cmd_ptest = "ptest";
-
+my $logident = "sap_suse_cluster_connector";
+my $logoptions = "pid";
+my $logfacility = "LOG_USER";
+#
+# open syslog
+#
+openlog($logident, $logoptions, $logfacility);
 my @all_cmds = ($cmd_cibadmin, $cmd_crm_resource, $cmd_ptest);
 
+#	printf "ARGV: %s\n", join(" ", @ARGV);
 sub usage() {
 printf "$0 --help
 $0 cmd options
       where cmd could be:  
       help 
       init
-      cpa --res RES --act ACT --sta STA
+      cpa --res RES --act ACT 
       lsr --out FILE --sid SID --ino INO | --dbhost HOST --dbtype TYPE
       fra --res RES --act ACT  [ --nod NODE ]
       lsn --out FILE --res RES
@@ -45,6 +60,7 @@ $0 cmd options
 }
 
 sub paramproblem() {
+	syslog("LOG_ERR", "called with wrong parameters");
 	usage();
 	exit(2);
 }
@@ -64,27 +80,63 @@ sub checkavail(@) {
 sub initial_check() {
 	my $rc=0;
 	my $check_cmd;
+	#
+	# move old log file to *.old in cwd which is /usr/sap/<SID>/<INST>/work
+	#
+	rename("$logident" . ".log", "$logident" . ".old");
+	#
+	# open new log file in cwd which is /usr/sap/<SID>/<INST>/work
+        #
+	#($DEBUG, $filename) = tempfile("sap_suse_cluster_conector.XXXXX", SUFFIX => '.log');
+	open($DEBUG, ">>$logident" . ".log");
+	*STDOUT=*$DEBUG;
+	printf "\n---------------------------------------------------\n";
+	printf "trc file: %s\n", $logident . ".log";
+	printf "---------------------------------------------------\n";
+	$nowstring = localtime;
+	printf "%s : init()\n", $nowstring;
 	for $check_cmd ( @all_cmds) {
+#		if ( -e "/usr/bin/$check_cmd" ) {
+#			printf "INFO: %s available", $check_cmd;
+#		} else {
+#			printf "ERR: Cluster command %s missing\n", $check_cmd;
+#			$rc=3;
+#		}
 	}
 	return $rc;
 }
 
 sub fire_resource_action {
-	my ($rsc, $act, $nod) = @_;
+	my ($rsc, $act, $nod) = ("", "", "");
+	($rsc, $act, $nod) = @_;
 	my $rc=0;
+        my $sysconfig = "/etc/sysconfig/sap_suse_cluster_connector";
+	$nowstring = localtime;
+	printf "%s : fra($rsc, $act, $nod)\n", $nowstring;
+	open SYSCONF, "<$sysconfig" or syslog("LOG_INFO", "open %s failed", $sysconfig);
+	while (<SYSCONF>) {
+		chomp;
+		my $line = $_;
+		printf "%s...\n",  $line;
+		if ($line =~ /BLOCK_RESOURCES=.*$rsc/) {
+                   syslog("LOG_INFO", "BLOCK INFO: fra call %s for resource %s blocked as defined in %s", $act, $rsc, $sysconfig);
+		   return 0;
+		}
+        }
+	close SYSCONF;
 	if ( $act eq "stop" ) {
-		printf "fire_resource_action stop\n";
+		syslog("LOG_INFO", "fire_resource_action stop %s\n", $rsc);
 		if (system($cmd_crm_resource,"-r",$rsc,"-m","-p","target-role","-v","Stopped")) { $rc=1; }
 	} elsif ( $act eq "start" ) {
-		printf "fire_resource_action\n";
+		syslog("LOG_INFO","fire_resource_action start %s\n", $rsc);
 		if (system($cmd_crm_resource,"-r",$rsc,"-m","-d","target-role") ) { $rc=1; }
 	} elsif ( $act eq "migrate" ) {
-		printf "fire_resource_action\n";
+		syslog("LOG_INFO","fire_resource_action migrate %s %s\n", $rsc, $nod);
 		if ( defined $nod ) {
 			if (system($cmd_crm_resource,"-r",$rsc,"-M","-N",$nod) ) { $rc=1; }
 		}
 	}
-	printf " rc=%i\n", $rc;
+	syslog("LOG_INFO"," rc=%i\n", $rc);
 	return $rc;
 }
 
@@ -92,6 +144,8 @@ sub check_pending_action {
 	my ($res, $act, $sta) = @_;
 	my $rc=0;
 	my $found=0;
+	$nowstring = localtime;
+	printf "%s : cpa()\n", $nowstring;
 	#
 	# rc:
 	#     0: found
@@ -99,25 +153,75 @@ sub check_pending_action {
         #     2: internal error
 	$rc=1;
 	#    
+	# rsc_ip_NA1_sapna1as     (ocf::heartbeat:IPaddr2) Started : rsc_ip_NA1_sapna1as_start_0 (node=node0101, call=16, rc=0): complete
+        # rsc_sap_NA1_ASCS00_sapna1as:0   (ocf::heartbeat:SAPInstance) Stopped : rsc_sap_NA1_ASCS00_sapna1as:0_monitor_0 (node=node0102, call=11, rc=7): complete
+        # rsc_sap_NA1_ASCS00_sapna1as:0   (ocf::heartbeat:SAPInstance) Slave : rsc_sap_NA1_ASCS00_sapna1as:0_start_0 (node=node0101, call=-1, rc=14): pending
+        # rsc_sap_NA1_ASCS00_sapna1as:0   (ocf::heartbeat:SAPInstance) Master : rsc_sap_NA1_ASCS00_sapna1as:0_demote_0 (node=node0101, call=-1, rc=14): pending
+        # rsc_sap_HA0_D02 (ocf::heartbeat:SAPInstance) Started  FAILED: rsc_sap_HA0_D02_start_0 (node=cl2n01, call=-1, rc=14): pending<---- FOUND!!
+        #
 	#    crm_resource -O -r $rsc | grep "${rsc}_${act}_.*: ${sta}"  && rc=0
-	open CRMOUT, "$cmd_crm_resource -O -r $res 2>/dev/null |" or $rc=2;
+	#open CRMOUT, "$cmd_crm_resource -O -r $res 2>/dev/null |" or $rc=2;
+	open CRMOUT, "$cmd_crm_resource -O 2>/dev/null |" or $rc=2;
+	printf "<--------- cpa ------>\n";
 	while (<CRMOUT>) {
 		chomp;
 		my $line = $_;
-		if ( $line =~ /${res}_${act}_.*: ${sta}/ ) {
+		printf "%s", $line;
+		# if ( $line =~ /${res}_${act}_.*: ${sta}/ ) { # FH 2012-01-05: Changed to find also clones and master-slaves
+		#if ( $line =~ /${res}(:[0-9]+_|_)${act}_.*: ${sta}/ ) {
+		#if ( $line =~ /${res}.*: ${sta}/ ) {
+		my ${masteract};
+		if ( ${act} eq "stop" ) {
+			$masteract="demote";
+		} elsif ( ${act} eq "start" ) {
+                        $masteract="promote";
+                }
+		#if ( $line =~ /(${res}(:[0-9]+)?_(${act}|${masteract})_0.*: ${sta})/ ) {
+		if ( $line =~ /(${res}(:[0-9]+)?_(${act}|demote|promote)_0.*: ${sta})/ ) {
+			$rc=0;
+			syslog("LOG_INFO","Pending action %s for %s found", $1, ${res});
+			printf "<---- FOUND!!";
+		}
+		printf "\n";
+	}
+        close CRMOUT;
+	if ( $rc != 0 ) {
+           open CRMOUT, "$cmd_crm_resource --resource ${res} --get-parameter target-role --meta 2>/dev/null |" or $rc=2;
+           while (<CRMOUT>) {
+                chomp;
+                my $line = $_;
+                printf "%s", $line;
+		if ( (${act} eq "stop") && ( $line =~ "Stopped" )) {
+			$rc=0;
+			syslog("LOG_INFO","target-role stopped for resource %s found", ${res});
+		}
+		if ( (${act} eq "start") && ( $line =~ "Started" )) {
+			syslog("LOG_INFO","target-role started for resource %s found", ${res});
 			$rc=0;
 		}
-	}
+	   }
+        }
+	close CRMOUT;
+        #
+        #### BY_PASS_CODE
+        #if ( $rc != 0 ) { 
+	#	syslog("LOG_INFO","SENDING PENDING ACTION FOUND TO DEBUG");
+	#	$rc=0;
+        #}
+	printf "</--------- cpa ------>\n";
 	return $rc;
 }
 
-sub list_sap_resources {  
+sub list_sap_resources {
 	#
 	# --out file --sid sid --ino ino
 	#
 	my ($out, $sid, $ino) = @_;
 	my $rc=2;
-	# TODO: implement action
+	$nowstring = localtime;
+	printf "%s : lsr()\n", $nowstring;
+	#
+	# TODO: If a query for SID+InstNR returns multiple row  fire a error message (syslog and developer trace log)
 	#
 	# typical crm syntax/output:
 	# primitive rsc_SAPInstance_NA0_ASCS00_sapna0as ocf:heartbeat:SAPInstance \
@@ -132,11 +236,12 @@ sub list_sap_resources {
 	#use IO::Handle;
 
 	my ($sclass, $sprovider, $sra, $sparam, $sparam2 ) = ("ocf", "heartbeat", "SAPInstance", "InstanceName", "ERS_InstanceName");
+	#my ($out, $sid, $ino ) = @ARGV;
 
 	$ENV{'PATH'} = $ENV{'PATH'} . ":/usr/sbin:/sbin";
-	print "(out, sid, ino) = ( $out, $sid, $ino )\n" if $trace;
-
-	# found values
+	#printf "LSR\n";
+	#printf "PARAMS: (out, sid, ino) = ( %s, %s, %s)\n", $out, $sid, $ino ;
+	#printf "ARGV: %s", join(" ", @ARGV);
 
 	my ($fclass, $fprovider, $fra, $fname, $fgname) = ("","","","","");
 	my $foundRes = 0; # found correct Resource
@@ -144,68 +249,77 @@ sub list_sap_resources {
 	open CRMOUT, "$cmd_cibadmin --local -Q --xpath '//primitive[\@type=\"$sra\"]' --node-path 2>/dev/null |" || die "could not open cibadmin output";
 	while (<CRMOUT>) {
 		my $line = $_;
-		print "Got: $line" if $trace;
 		if ($line =~ /primitive..id='([a-zA-Z0-9_]+)'/) {
 			($fname) = ($1);
-			print "Found fname: $fname\n" if $trace;
 		} else {
-			print "No fname\n" if $trace;
 			next;
 		}
 
 		if ( $line =~ /[group|master|clone]..id='([a-zA-Z0-9_]+)'/) {
 			($fgname) = ($1);
-			print "Found fgname: $fgname\n" if $trace;
 		}
 
 		if ($foundRes==0) {
-			open RESOURCE_OUT, "$cmd_cibadmin -Q --xpath \"//primitive[\@id='$fname']//nvpair[\@name='$sparam']\"  2>/dev/null |" || die "could not open crm_resource output";
-			while (<RESOURCE_OUT>) {
+			open RESOURCE1_OUT, "$cmd_cibadmin -Q --xpath \"//primitive[\@id='$fname']//nvpair[\@name='$sparam']\"  2>/dev/null |" || die "could not open cibadmin output";
+			while (<RESOURCE1_OUT>) {
 				my $result = $_;
-				print " Got: $result" if $trace;
 				if ($result =~ /value="([a-zA-Z0-9_]+)"/) {
-				        print " Found value: $1\n" if $trace;
+					my $finstance=$1;
 					if ( $1 =~ /^${sid}_[a-zA-Z0-9]+${ino}_[a-zA-Z0-9_-]+$/ ) {
 						$foundRes=1;
+					    syslog("LOG_DEBUG","Resource %s with %s=%s found\n", $fname, $sparam, $finstance);
 					}
 				}
 			}
 		}
 
 		if ($foundRes==0) {
-			open RESOURCE_OUT, "$cmd_cibadmin -Q --xpath \"//primitive[\@id='$fname']//nvpair[\@name='$sparam2']\"  2>/dev/null |" || die "could not open crm_resource output";
-			while (<RESOURCE_OUT>) {
+			open RESOURCE2_OUT, "$cmd_cibadmin -Q --xpath \"//primitive[\@id='$fname']//nvpair[\@name='$sparam2']\"  2>/dev/null |" || die "could not open cibadmin output";
+			while (<RESOURCE2_OUT>) {
 				my $result = $_;
-				print "  Got: $result" if $trace;
 				if ($result =~ /value="([a-zA-Z0-9_]+)"/) {
-				        print "  Found value: $1\n" if $trace;
+					my $finstance=$1;
 					if ( $1 =~ /^${sid}_[a-zA-Z0-9]+${ino}_[a-zA-Z0-9_-]+$/ ) {
 						$foundRes=1;
+					    syslog("LOG_DEBUG","Resource %s with %s=%s found\n", $fname, $sparam2, $finstance);
 					}
+				}
+			}
+		}
+
+		# check to make sure the resource is managed
+		if ($foundRes==1) {
+			open MANAGED_OUT, "$cmd_cibadmin -Q --xpath \"//primitive[\@id='$fname']//nvpair[\@name='is-managed'][\@value='false']\"  2>/dev/null |" || die "could not open cibadmin output";
+			while (<MANAGED_OUT>) {
+				my $result = $_;
+				if ($result =~ /value="false"/) {
+					syslog("LOG_DEBUG","Resource %s is unmanged - ignore for sapstartsrv lsr call", $fname);
+					$foundRes=0;
 				}
 			}
 		}
 
 		if ($foundRes == 1) {
-		        print "Found resource\n" if $trace;
 			last;
 		}
 	}
 
 	if ($foundRes==1) {
-	        print "Writing to $out\n" if $trace;
 		if ($out eq "") {
 			printf "%s:%s:%s\n", $fname, $fgname, "-";
 			$rc=1;
 		} else {
-		        unless (open(OUT, '>',$out)) {
-			    print STDERR "Can't open $out: $!\n";
+			unless (open(OUT, '>',$out)) {
+				print STDERR "Can't open $out: $!\n";
 			}
-			printf "%s:%s:%s:%s:%s\n", $sid, $ino, $fname, $fgname, "-";
+			syslog("LOG_INFO","lsr result: %s:%s:%s:%s:%s\n", $sid, $ino, $fname, $fgname, "-");
 			printf OUT "%s:%s:%s:%s:%s\n", $sid, $ino, $fname, $fgname, "-";
 			close OUT;
 			$rc=0;
 		}
+	} else {
+		syslog("LOG_INFO","lsr result: empty\n");
+		$rc=1;
 	}
 
 	# TODO: scores and node names sorted by scores -> use crm_simulate
@@ -215,7 +329,7 @@ sub list_sap_resources {
 	#group_color: rsc_SAPInstance_NA0_ASCS00_sapna0as allocation score on ls3199: 0
 	#native_color: rsc_SAPInstance_NA0_ASCS00_sapna0as allocation score on ls3199: -INFINITY
 	return $rc;
-} 
+}
 
 sub list_sap_nodes { 
 	#
@@ -229,6 +343,8 @@ sub list_sap_nodes {
 	#
 	my ($outfile, $resource) = @_;
 	my $rc=0;
+	$nowstring = localtime;
+	printf "%s : lsn()\n", $nowstring;
 	# TODO: check implemented action
 	###############################################################################################
 	###############################################################################################
@@ -325,6 +441,7 @@ sub list_sap_nodes {
 	# 
 	if ( $outfile ne "" ) {
 		open OUTFILE, ">$outfile";
+		syslog("LOG_INFO","lsn result: %s:%s:%s:%s\n",  $resource, $myhostname, $current_node, $node_list);
 		printf OUTFILE "%s:%s:%s:%s\n",  $resource, $myhostname, $current_node, $node_list;
 		close OUTFILE;
 	} else {
@@ -334,41 +451,49 @@ sub list_sap_nodes {
 }
 
 
-
-############################################################################
-############################################################################
-############################################################################
-############################################################################
-############################################################################
-
-
+#
+# "main"
+#
 my ($cmd) = @ARGV; shift;
 my $result=2;
 my ($sid, $ino, $act, $out, $res, $nod, $sta);
 my $return_code=2;
+$nod="";
 $ENV{'PATH'} = $ENV{'PATH'} . ":/usr/sbin:/sbin";
 
+if ( $cmd eq "h" || $cmd eq "help" ||  $cmd eq "--help" ) {
+	 usage();
+	 exit 0;
+}
 if  ($cmd eq "init")  {
+	syslog("LOG_INFO", "init call");
 	$return_code=initial_check();
 } elsif ( $cmd eq "cpa" ) {
+	open($DEBUG, ">>$logident" . ".log");
+	*STDOUT=*$DEBUG;
 	$result = GetOptions ("res=s" => \$res,    
 	                   "act=s" => \$act,
-	                   "sta=s" => \$sta,
 		 ) &&
-	checkavail(($res, $sta, $act)) || paramproblem();
-	$return_code=check_pending_action($res, $act, $sta);
+	checkavail(($res, $act)) || paramproblem();
+	syslog("LOG_INFO", "cpa call (res=%s,act=%s)", $res, $act);
+	$return_code=check_pending_action($res, $act, "pending");
 
 
  } elsif ( $cmd eq "lsr" ) {
+	open($DEBUG, ">>$logident" . ".log");
+	*STDOUT=*$DEBUG;
 	$result = GetOptions ("sid=s" => \$sid,    
 	                   "ino=s" => \$ino,
 	                   "out=s" => \$out,
 		 ) &&
 	checkavail(($sid, $ino, $out)) || paramproblem();
+	syslog("LOG_INFO", "lsr call (out=%s,sid=%s,ino=%s)", $out, $sid, $ino);
 	$return_code=list_sap_resources($out, $sid, $ino);
 	
 
  } elsif ( $cmd eq "fra" ) {
+	open($DEBUG, ">>$logident" . ".log");
+	*STDOUT=*$DEBUG;
 	 #
 	 # remark: don't check if nod is set - as it is optional
 	 #
@@ -377,29 +502,34 @@ if  ($cmd eq "init")  {
 	                   "nod=s" => \$nod,
 		 ) && 
 	checkavail(($res, $act)) || paramproblem();
+	syslog("LOG_INFO", "fra call (res=%s,act=%s,nod=%s)", $res, $act, $nod);
 	$return_code=fire_resource_action($res, $act, $nod);
 
  } elsif ( $cmd eq "lsn" ) {
+	open($DEBUG, ">>$logident" . ".log");
+	*STDOUT=*$DEBUG;
 	$result = GetOptions ("out=s" => \$out,    
 	                   "res=s" => \$res,
 		 ) &&
 	checkavail(($res, $out)) || paramproblem();
 	# TODO: action
+	syslog("LOG_INFO", "lsn call (out=%s,res=%s)", $out, $res);
 	$return_code=list_sap_nodes($out, $res);
 
- } elsif ( $cmd eq "h" || $cmd eq "help" ||  $cmd eq "--help" ) {
-	 usage();
-	 exit 0;
 
  } else  {
+	open($DEBUG, ">>$logident" . ".log");
+	*STDOUT=*$DEBUG;
 	 #
 	 # remark: found no or unknown cmd
 	 #
+	$nowstring = localtime;
+	printf "%s : unkown function %s\n", $nowstring, $cmd;
  	paramproblem()
  }
 	
+ syslog("LOG_INFO", "TEST END");
+closelog();
 exit $return_code;
-
-#################################################################
-#################################################################
+#
 #################################################################
