@@ -1,12 +1,14 @@
 #!/usr/bin/perl
 ############################################################################
 #
-# sap_suse_cluster_connector
+# sap_redhat_cluster_connector
 #
 # Author:  fabian.herschel@suse.com
 # (c) 2010 SUSE Linux Products GmbH, Nuremberg, Germany
 # License: GPLv2 or later
 #
+# based on:
+# sap_suse_cluster_connector
 ############################################################################
 #
 # REMARKS:
@@ -36,7 +38,7 @@ my $nowstring;
 my $cmd_cibadmin = "cibadmin";
 my $cmd_crm_resource = "crm_resource";
 my $cmd_ptest = "crm_simulate";
-my $logident = "sap_suse_cluster_connector";
+my $logident = "sap_redhat_cluster_connector";
 my $logoptions = "pid";
 my $logfacility = "LOG_USER";
 #
@@ -87,7 +89,7 @@ sub initial_check() {
 	#
 	# open new log file in cwd which is /usr/sap/<SID>/<INST>/work
         #
-	#($DEBUG, $filename) = tempfile("sap_suse_cluster_conector.XXXXX", SUFFIX => '.log');
+	#($DEBUG, $filename) = tempfile("sap_redhat_cluster_conector.XXXXX", SUFFIX => '.log');
 	open($DEBUG, ">>$logident" . ".log");
 	*STDOUT=*$DEBUG;
 	printf "\n---------------------------------------------------\n";
@@ -110,7 +112,7 @@ sub fire_resource_action {
 	my ($rsc, $act, $nod) = ("", "", "");
 	($rsc, $act, $nod) = @_;
 	my $rc=0;
-        my $sysconfig = "/etc/sysconfig/sap_suse_cluster_connector";
+        my $sysconfig = "/etc/sysconfig/sap_redhat_cluster_connector";
 	$nowstring = localtime;
 	printf "%s : fra($rsc, $act, $nod)\n", $nowstring;
 	open SYSCONF, "<$sysconfig" or syslog("LOG_INFO", "open %s failed", $sysconfig);
